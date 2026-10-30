@@ -1,0 +1,22 @@
+# Build dependencies for the pieces that have no current aarch64 package:
+#   Quickshell 0.3.2 (Fedora/COPR aarch64 only have 0.2.1 snapshots), matugen 4.2.0 (Fedora has 3.1),
+#   obs-cmd, Darkly (Qt style, no aarch64 COPR), and the Python venv for the color scripts.
+# All checked against Fedora 44/45 aarch64 on 2026-10-30.
+
+# Toolchain
+gcc gcc-c++ clang cmake ninja-build meson pkgconf-pkg-config git cargo rust gettext
+
+# Quickshell
+qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtdeclarative-devel qt6-qtshadertools-devel
+qt6-qtwayland-devel qt6-qtsvg-devel cli11-devel glib2-devel mesa-libgbm-devel jemalloc-devel
+libdrm-devel pipewire-devel pam-devel polkit-devel wayland-devel wayland-protocols-devel
+spirv-tools vulkan-headers libxcb-devel
+
+# Darkly
+extra-cmake-modules kf6-kcoreaddons-devel kf6-kcolorscheme-devel kf6-kconfig-devel
+kf6-kguiaddons-devel kf6-ki18n-devel kf6-kiconthemes-devel kf6-kwindowsystem-devel
+kf6-kcmutils-devel kf6-kirigami-devel kf6-frameworkintegration-devel
+
+# Python venv (~/.local/state/quickshell/.venv)
+python3.12 python3.12-devel uv cairo-devel cairo-gobject-devel gobject-introspection-devel
+dbus-devel gtk4-devel libadwaita-devel libsoup3-devel libportal-gtk4

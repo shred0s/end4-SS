@@ -1,0 +1,6 @@
+# Optional (--with-clips): build gpu-screen-recorder for the Clips module.
+# It has no aarch64 package, and Apple GPUs have no VA-API encoder, so clip.sh records with
+# -encoder cpu (libx264). That needs RPM Fusion's ffmpeg, which install.sh swaps in for ffmpeg-free.
+ffmpeg-devel meson libva-devel libcap-devel pulseaudio-libs-devel libglvnd-devel libX11-devel
+libXcomposite-devel libXrandr-devel libXfixes-devel libXdamage-devel vulkan-headers
+wayland-devel dbus-devel pipewire-devel libdrm-devel

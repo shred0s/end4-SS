@@ -1,0 +1,3 @@
+# COPR repos with fedora-44/45-aarch64 builds (checked 2026-10-30)
+sdegler/hyprland          # hyprland 0.57, hypridle, hyprlock, hyprpicker, hyprsunset, hyprshot, xdph, mpvpaper
+ririko66z/dots-hyprland   # end-4 fonts, Bibata cursors, breeze-plus icons, songrec, microtex

@@ -1,0 +1,51 @@
+# Runtime packages. Every name was checked against the Fedora 44 and 45 aarch64 repos
+# (Everything + updates) or the aarch64 builds of the COPRs in copr.txt on 2026-10-30.
+
+# GPU drivers (not always there on a Minimal install)
+mesa-dri-drivers mesa-vulkan-drivers
+
+# Hyprland (COPR sdegler/hyprland)
+hyprland hyprland-guiutils hyprland-qt-support hypridle hyprlock hyprpicker hyprsunset hyprshot
+xdg-desktop-portal-hyprland mpvpaper
+
+# Portals, session and KDE bits the shell talks to
+xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-kde
+polkit-kde gnome-keyring libsecret NetworkManager plasma-nm bluedevil dolphin
+plasma-systemsettings plasma-systemmonitor plasma-workspace kde-cli-tools kf6-kconfig kf6-kcmutils
+xsettingsd geoclue2 geoclue2-demos upower brightnessctl ddcutil
+
+# Quickshell runtime (Quickshell itself is built from source, see install.sh)
+qt6-qtbase qt6-qtdeclarative qt6-qtsvg qt6-qt5compat qt6-qtimageformats qt6-qtmultimedia
+qt6-qtpositioning qt6-qtquicktimeline qt6-qtsensors qt6-qttools qt6-qttranslations
+qt6-qtvirtualkeyboard qt6-qtwayland kf6-kirigami kf6-syntax-highlighting kf6-kimageformats
+kdialog jemalloc
+
+# Audio and media
+pipewire-pulseaudio pulseaudio-utils wireplumber pavucontrol-qt playerctl cava easyeffects
+libdbusmenu-gtk3 mpv ffmpeg-free
+
+# Basics
+bc coreutils curl wget2-wget git ripgrep jq yq rsync unzip xdg-utils xdg-user-dirs
+wl-clipboard cliphist libnotify glib2 ImageMagick
+
+# Shell, terminals, prompt helpers
+fish kitty foot eza fastfetch btop
+
+# Neovim (LazyVim needs tree-sitter-cli, a C compiler, ripgrep and fd)
+neovim tree-sitter-cli fd-find make
+
+# Screenshots, OCR, recording
+grim slurp swappy wf-recorder tesseract tesseract-langpack-eng
+
+# Widgets and input
+fuzzel wlogout zenity translate-shell qalculate wtype ydotool
+
+# Themes, fonts, cursors (fonts/cursors/icons marked * come from COPR ririko66z/dots-hyprland)
+adw-gtk3-theme plasma-breeze breeze-icon-theme kvantum fontconfig material-icons-fonts
+twitter-twemoji-fonts
+google-sans-flex-vf-fonts* google-material-symbols-vf-rounded-fonts* readex-pro-fonts-all*
+google-rubik-vf-fonts* florian-karsten-space-grotesk-fonts* jetbrains-mono-nerd-fonts*
+bibata-cursor-theme-modern-classic* breeze-plus-icon-theme*
+
+# Shell extras (COPR ririko66z/dots-hyprland)
+songrec* microtex*
