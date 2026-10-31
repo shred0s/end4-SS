@@ -46,8 +46,9 @@ first row is a workspace with btop, fastfetch and cava, and the dashboard with a
   against the fedora aarch64 repos, so other distros or intel macs wont work with the script.
 - **some patience.** a few things dont have arm packages (or only really old ones), so the script
   builds them from source. the first run takes a while.
-- **ur old configs are safe.** anything the script replaces gets moved to
-  `~/.local/share/end4-pc-dotfiles/backup-<date>/` first.
+- **ur old configs are safe.** running it again keeps ur configs and settings, only the shell and
+  hyprlands core files get updated and new settings get added to config.json. anything the script
+  replaces gets moved to `~/.local/share/end4-pc-dotfiles/backup-<date>/` first.
 
 ## Whats different from upstream
 
@@ -77,13 +78,14 @@ that generates the colors for everything else.
 |---|---|
 | `--with-clips` | also builds gpu-screen-recorder for clips |
 | `--no-notch` | leaves the notch area hidden |
+| `--reset` | swaps ur configs for the repos instead of keeping them (on a mac run `--reset dots asahi notch`) |
 
 `--with-clips` turns on rpm fusion and swaps `ffmpeg-free` for the full `ffmpeg`. apple gpus dont
 have a video encoder linux can use, so clips get encoded on the cpu (libx264) on macs.
 
 ### Running single steps
 
-u can run any step on its own, like to copy the configs again, or to link a firefox profile u
+u can run any step on its own, like to update the shell, or to link a firefox profile u
 made after installing:
 
 ```sh
@@ -98,13 +100,14 @@ made after installing:
 | `tools` | matugen, obs-cmd and starship |
 | `darkly` | builds the darkly qt style |
 | `python` | the python venv the color scripts use |
-| `dots` | copies the configs and the default wallpaper |
+| `dots` | updates the shell, and adds the configs u dont have yet and the default wallpaper |
 | `asahi` | macbook display and trackpad settings |
 | `notch` | turns on the notch area and the notch aware bar |
 | `firefox` | links the matugen firefox theme into ur profile |
 | `system` | gtk/qt themes, cursor, fonts, user groups and fish as ur login shell |
 | `login` | sets up greetd + tuigreet as the login screen if u dont have one (like on a minimal install) |
 | `clips` | builds gpu-screen-recorder (same as `--with-clips`) |
+| `restore` | puts back the configs from a backup (the newest one with ur settings, or `--from=<folder>`) |
 
 ## The notch
 
@@ -193,6 +196,9 @@ when u update.
 - **the gap around the notch is too wide or too small.** change notch width in settings → bar.
 - **everything is too big or too small.** change `scale` in `~/.config/hypr/monitors.lua`
   (try `1.6` on the 13" air).
+- **running the script again reset my settings.** older versions of it replaced ur configs (keyboard
+  layout, wallpaper, dock, bar, fish/PATH). pull, then run `./install.sh restore` to get them back
+  from the backup it made, and log out and back in.
 - **clips says gpu-screen-recorder isnt installed.** run `./install.sh --with-clips clips`.
 - **no colors after the first login.** pick a wallpaper with `Ctrl + Super + T`.
 - **firefox isnt themed.** open firefox once so it makes a profile, then run `./install.sh firefox`.

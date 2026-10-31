@@ -5,15 +5,22 @@
 #   ./install.sh dots notch        only the named steps
 #   ./install.sh --with-clips      also build gpu-screen-recorder for the Clips module
 #   ./install.sh --no-notch        leave the MacBook notch area hidden
+#   ./install.sh --reset dots      swap your configs for the repo's instead of keeping them
+#                                  (add asahi notch on a Mac, so its tweaks go back on too)
+#   ./install.sh restore           put back the configs in a backup (--from=<folder> picks which)
 #
-# configs that already exist are moved to ~/.local/share/end4-pc-dotfiles/backup-<date>/ first
+# Running it again keeps your configs and settings: only the shell and Hyprland's core files get
+# updated, and settings new to the repo get added to config.json. Anything replaced is moved to
+# ~/.local/share/end4-pc-dotfiles/backup-<date>/ first
 set -Eeuo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/end4-pc-dotfiles"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}"
 VENV="$STATE/quickshell/.venv"
-BACKUP="$HOME/.local/share/end4-pc-dotfiles/backup-$(date +%Y%m%d-%H%M%S)"
+DATA="$HOME/.local/share/end4-pc-dotfiles"
+BACKUP="$DATA/backup-$(date +%Y%m%d-%H%M%S)"
+SETTINGS="$HOME/.config/illogical-impulse/config.json"
 
 QUICKSHELL_REV=4f508be500dea6e5732cc3d50382a0048b17e7b1 # Quickshell 0.3.2
 MATUGEN_VERSION=4.2.0
@@ -25,19 +32,28 @@ ALL_STEPS=(packages quickshell tools darkly python dots asahi notch firefox syst
 steps=()
 with_clips=false
 notch=true
+reset=false
+restore_from=""
 for arg in "$@"; do
     case $arg in
         --with-clips) with_clips=true ;;
         --no-notch) notch=false ;;
-        -h | --help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --reset) reset=true ;;
+        --from=*) restore_from=${arg#--from=}; restore_from=${restore_from/#\~/$HOME} ;;
+        -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unknown option: $arg" >&2; exit 1 ;;
         *) steps+=("$arg") ;;
     esac
 done
+# Steps asked for by name redo their tweaks; a full run only applies them to a fresh install
+explicit=true
 if [[ ${#steps[@]} -eq 0 ]]; then
+    explicit=false
     steps=("${ALL_STEPS[@]}")
     if $with_clips; then steps+=(clips); fi
 fi
+first_install=true
+if [[ -e $SETTINGS ]]; then first_install=false; fi
 
 log() { printf '\e[1;34m::\e[0m %s\n' "$*"; }
 warn() { printf '\e[1;33m!!\e[0m %s\n' "$*" >&2; }
@@ -47,17 +63,88 @@ list() { sed 's/#.*//; s/\*//g' "$REPO/packages/$1" | tr -s ' \n' '\n' | grep -v
 
 is_apple() { grep -qs 'apple,' /proc/device-tree/compatible; }
 
+# Files the repo's copy went into during this run, which the tweak steps are free to change
+declare -A FRESH=()
+kept=0
+
+# Moves a path into this run's backup, or copies it there with --copy. The first copy of a path is the one kept
 backup() {
     local path=$1 rel=${1#"$HOME"/}
     [[ -e $path || -L $path ]] || return 0
+    if [[ -e $BACKUP/$rel || -L $BACKUP/$rel ]]; then
+        if [[ ${2:-} != --copy ]]; then rm -rf "$path"; fi
+        return 0
+    fi
     mkdir -p "$BACKUP/$(dirname "$rel")"
-    mv "$path" "$BACKUP/$rel"
+    if [[ ${2:-} == --copy ]]; then cp -a "$path" "$BACKUP/$rel"; else mv "$path" "$BACKUP/$rel"; fi
 }
 
 deploy() {
     backup "$2"
     mkdir -p "$(dirname "$2")"
     cp -a "$1" "$2"
+    FRESH[$2]=1
+}
+
+# For files the repo owns: brings them up to date, leaving them be if they already are
+update() {
+    if [[ -e $2 ]] && diff -rq -x __pycache__ "$1" "$2" &>/dev/null; then return 0; fi
+    deploy "$1" "$2"
+}
+
+# For the user's configs: puts the repo's copy in only if there's nothing there yet (or with --reset)
+offer() {
+    if [[ -e $2 || -L $2 ]] && ! $reset; then
+        kept=$((kept + 1))
+    else
+        update "$1" "$2"
+    fi
+}
+
+# Hyprland's own files, which hyprland.lua says not to edit (your changes go in custom/). The shell's
+# settings write shellOverrides/ and matugen writes colors.lua, so those are the user's
+is_core() {
+    case $1 in
+        hypr/hyprland/shellOverrides/* | hypr/hyprland/colors.lua) return 1 ;;
+        hypr/hyprland.lua | hypr/hyprland/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Whether a tweak step may change a file: the repo's copy went in during this run, or the step was
+# asked for by name, in which case the user's copy is backed up first
+may_edit() {
+    [[ -e $1 ]] || return 1
+    [[ -z ${FRESH[$1]:-} ]] || return 0
+    $explicit || return 1
+    backup "$1" --copy
+}
+
+# The repo's configs say @HOME@ where the home folder goes
+fill_home() {
+    local pictures
+    pictures=$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Pictures")
+    sed -e "s|@HOME@/Pictures|$pictures|g" -e "s|@HOME@|$HOME|g"
+}
+
+# config.json keeps every value already in it and gains only the settings that are new in the repo's
+merge_settings() {
+    local src=$1 dest=$2 defaults merged
+    if [[ ! -e $dest ]] || $reset; then
+        update "$src" "$dest"
+        return 0
+    fi
+    defaults=$(mktemp)
+    merged=$(mktemp)
+    fill_home <"$src" >"$defaults"
+    if ! jq --indent 4 --slurpfile mine "$dest" '. * $mine[0]' "$defaults" >"$merged" 2>/dev/null; then
+        warn "Couldn't read ${dest/#"$HOME"/\~}, left it as it is"
+    elif ! jq -e --slurpfile mine "$dest" '. == $mine[0]' "$merged" >/dev/null; then
+        backup "$dest" --copy
+        cat "$merged" >"$dest"
+        log "Added the settings that are new in this version to ${dest/#"$HOME"/\~}"
+    fi
+    rm -f "$defaults" "$merged"
 }
 
 jq_edit() {
@@ -165,26 +252,40 @@ step_python() {
 }
 
 step_dots() {
-    log "Copying configs (existing ones are moved to ${BACKUP/#"$HOME"/\~})"
-    local item name file
-    for item in "$REPO"/config/*; do
-        name=$(basename "$item")
-        if [[ $name == quickshell ]]; then
-            deploy "$item/end4-pC" "$HOME/.config/quickshell/end4-pC"
+    log "Updating the shell and Hyprland's core files"
+    update "$REPO/config/quickshell/end4-pC" "$HOME/.config/quickshell/end4-pC"
+    local file rel tmp
+    while IFS= read -r -d '' file; do
+        rel=${file#"$REPO"/config/}
+        if [[ $rel == illogical-impulse/config.json ]]; then
+            merge_settings "$file" "$SETTINGS"
+        elif [[ $rel == hypr/monitors.lua ]] && is_apple; then
+            offer "$REPO/asahi/hypr/monitors.lua" "$HOME/.config/$rel"
+        elif is_core "$rel"; then
+            update "$file" "$HOME/.config/$rel"
         else
-            deploy "$item" "$HOME/.config/$name"
+            offer "$file" "$HOME/.config/$rel"
+        fi
+    done < <(find "$REPO/config" -path "$REPO/config/quickshell" -prune -o -type f -print0)
+    while IFS= read -r -d '' file; do
+        offer "$file" "$HOME/.${file#"$REPO"/}"
+    done < <(find "$REPO/local" -type f -print0)
+    if ((kept)); then
+        log "Kept $kept configs you already had (./install.sh --reset dots swaps them for the repo's)"
+    fi
+
+    for file in "$SETTINGS" "$HOME/.config/hypr/hyprlock/colors.conf"; do
+        if [[ -n ${FRESH[$file]:-} ]]; then
+            tmp=$(mktemp)
+            fill_home <"$file" >"$tmp"
+            cat "$tmp" >"$file"
+            rm -f "$tmp"
         fi
     done
-    while IFS= read -r -d '' file; do
-        deploy "$file" "$HOME/.${file#"$REPO"/}"
-    done < <(find "$REPO/local" -type f -print0)
-
     local pictures
     pictures=$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Pictures")
     mkdir -p "$pictures/Wallpapers"
     cp --update=none "$REPO"/wallpapers/* "$pictures/Wallpapers/"
-    sed -i -e "s|@HOME@/Pictures|$pictures|g" -e "s|@HOME@|$HOME|g" \
-        "$HOME/.config/illogical-impulse/config.json" "$HOME/.config/hypr/hyprlock/colors.conf"
 }
 
 step_asahi() {
@@ -192,11 +293,26 @@ step_asahi() {
         warn "Not Apple hardware, skipping the MacBook tweaks"
         return
     fi
-    log "Applying MacBook tweaks (internal display, trackpad)"
-    cp "$REPO/asahi/hypr/monitors.lua" "$HOME/.config/hypr/monitors.lua"
-    jq_edit "$HOME/.config/illogical-impulse/config.json" '.hyprland.input.touchpad.clickfingerBehavior = true'
-    sed -i -E 's/(clickfinger_behavior = )false/\1true/; s/(sensitivity = )-?[0-9.]+/\10/' \
-        "$HOME/.config/hypr/hyprland/shellOverrides/main.lua" "$HOME/.config/hypr/custom/general.lua"
+    local monitors="$HOME/.config/hypr/monitors.lua" file changed=false
+    if [[ ! -e $monitors ]] || may_edit "$monitors"; then
+        cp "$REPO/asahi/hypr/monitors.lua" "$monitors"
+        changed=true
+    fi
+    if may_edit "$SETTINGS"; then
+        jq_edit "$SETTINGS" '.hyprland.input.touchpad.clickfingerBehavior = true'
+        changed=true
+    fi
+    for file in "$HOME/.config/hypr/hyprland/shellOverrides/main.lua" "$HOME/.config/hypr/custom/general.lua"; do
+        if may_edit "$file"; then
+            sed -i -E 's/(clickfinger_behavior = )false/\1true/; s/(sensitivity = )-?[0-9.]+/\10/' "$file"
+            changed=true
+        fi
+    done
+    if $changed; then
+        log "Applied the MacBook tweaks (internal display, trackpad)"
+    else
+        log "Keeping your display and trackpad settings (./install.sh asahi applies the MacBook ones again)"
+    fi
 }
 
 notch_width() {
@@ -242,9 +358,13 @@ step_notch() {
         log "Turning on the notch area ($param, takes effect after a reboot)"
         sudo grubby --update-kernel=ALL --args="$param"
     fi
-    log "Splitting the top bar's center modules around the notch (${width}px)"
-    jq_edit "$HOME/.config/illogical-impulse/config.json" --argjson width "$width" \
-        '.bar.notch = {enable: true, screen: "eDP-1", width: $width, splitIndex: -1}'
+    if may_edit "$SETTINGS"; then
+        log "Splitting the top bar's center modules around the notch (${width}px)"
+        jq_edit "$SETTINGS" --argjson width "$width" \
+            '.bar.notch = {enable: true, screen: "eDP-1", width: $width, splitIndex: -1}'
+    else
+        log "Keeping your notch bar settings (./install.sh notch sets them again)"
+    fi
 }
 
 step_firefox() {
@@ -273,9 +393,10 @@ step_system() {
         warn "Couldn't enable ydotool's service; the on-screen keyboard won't type"
 
     local key value
-    while read -r key value; do
-        gsettings set org.gnome.desktop.interface "$key" "$value" || warn "gsettings: couldn't set $key"
-    done <<'EOF'
+    if $first_install || $explicit; then
+        while read -r key value; do
+            gsettings set org.gnome.desktop.interface "$key" "$value" || warn "gsettings: couldn't set $key"
+        done <<'EOF'
 gtk-theme adw-gtk3-dark
 color-scheme prefer-dark
 icon-theme breeze-plus-dark
@@ -283,8 +404,11 @@ cursor-theme Bibata-Modern-Classic
 cursor-size 24
 font-name Google Sans Flex Medium 11 @opsz=11,wght=500
 EOF
-    kwriteconfig6 --file kdeglobals --group KDE --key widgetStyle Darkly
-    kwriteconfig6 --file kdeglobals --group Icons --key Theme breeze-plus-dark
+        kwriteconfig6 --file kdeglobals --group KDE --key widgetStyle Darkly
+        kwriteconfig6 --file kdeglobals --group Icons --key Theme breeze-plus-dark
+    else
+        log "Keeping your GTK/Qt theme, icons, cursor and font (./install.sh system sets them again)"
+    fi
     fc-cache -f >/dev/null
 
     local fish
@@ -333,6 +457,46 @@ step_clips() {
     sudo meson install -C "$src/build"
 }
 
+# Puts back the configs in a backup, by default the newest one holding a config.json (from the run that
+# replaced them). The shell and Hyprland's core files stay at this version
+step_restore() {
+    local from=$restore_from dir file rel dest answer count=0
+    if [[ -z $from ]]; then
+        for dir in "$DATA"/backup-*/; do
+            if [[ $dir != *-before-restore/ && -e ${dir}.config/illogical-impulse/config.json ]]; then
+                from=${dir%/}
+            fi
+        done
+    fi
+    [[ -n $from && -d $from ]] ||
+        die "Found no backup with your settings in ${DATA/#"$HOME"/\~}; pick one with --from=<folder>"
+    from=${from%/}
+    read -rp "Put back the configs from ${from/#"$HOME"/\~}? [Y/n] " answer || answer=""
+    if [[ $answer =~ ^[Nn] ]]; then
+        log "Pick another with --from=<folder>:"
+        printf '   %s\n' "$DATA"/backup-*/
+        return
+    fi
+
+    BACKUP="$BACKUP-before-restore" # Never picked by a later restore
+    while IFS= read -r -d '' file; do
+        rel=${file#"$from"/}
+        case $rel in
+            .config/quickshell/* | .config/mozilla/*) continue ;;
+            .config/* | .local/*) ;;
+            *) continue ;;
+        esac
+        if is_core "${rel#.config/}"; then continue; fi
+        dest="$HOME/$rel"
+        if [[ -e $dest ]] && cmp -s "$file" "$dest"; then continue; fi
+        backup "$dest"
+        mkdir -p "$(dirname "$dest")"
+        cp -a "$file" "$dest"
+        count=$((count + 1))
+    done < <(find "$from" \( -type f -o -type l \) -print0)
+    log "Put back $count files. Log out and back in so everything picks them up"
+}
+
 [[ $EUID -ne 0 ]] || die "Run this as your user; it uses sudo where it needs to"
 command -v dnf >/dev/null || die "This installer is for Fedora (Asahi Remix)"
 [[ $(uname -m) == aarch64 ]] || warn "This isn't aarch64; the package choices were checked for Apple Silicon"
@@ -349,5 +513,7 @@ done
 
 log "Done."
 [[ -d $BACKUP ]] && log "Your previous configs are in ${BACKUP/#"$HOME"/\~}"
-log "Reboot and log in to Hyprland. The welcome window lets you choose a wallpaper,"
-log "which generates the colors for everything else."
+if $first_install; then
+    log "Reboot and log in to Hyprland. The welcome window lets you choose a wallpaper,"
+    log "which generates the colors for everything else."
+fi
