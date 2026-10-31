@@ -172,7 +172,11 @@ step_packages() {
     done
 
     log "Installing packages"
-    sudo dnf install -y $(list fedora.txt) $(list fedora-build.txt)
+    local packages
+    packages=$(list fedora.txt; list fedora-build.txt)
+    # The clips step swaps ffmpeg-free for RPM Fusion's ffmpeg, and dnf won't install the two side by side
+    if rpm -q ffmpeg &>/dev/null; then packages=$(grep -vx ffmpeg-free <<<"$packages"); fi
+    sudo dnf install -y $packages
 }
 
 step_quickshell() {
@@ -457,25 +461,37 @@ step_clips() {
     sudo meson install -C "$src/build"
 }
 
-# Puts back the configs in a backup, by default the newest one holding a config.json (from the run that
-# replaced them). The shell and Hyprland's core files stay at this version
+# What a backup's config.json says, so the user can tell their own settings from the repo's defaults
+describe_backup() {
+    jq -r '"keyboard \(.hyprland.input.kbLayout // "?"), wallpaper \(.background.wallpaperPath // "?" | split("/") | last), dock: \(.dock.pinnedApps // [] | join(" "))"' \
+        "$1/.config/illogical-impulse/config.json" 2>/dev/null || echo "config.json unreadable"
+}
+
+# Puts back the configs in a backup that holds a config.json, picked from a list (newest first) or
+# given with --from. The shell and Hyprland's core files stay at this version
 step_restore() {
-    local from=$restore_from dir file rel dest answer count=0
+    local from=$restore_from dir file rel dest answer i count=0 choices=()
     if [[ -z $from ]]; then
         for dir in "$DATA"/backup-*/; do
             if [[ $dir != *-before-restore/ && -e ${dir}.config/illogical-impulse/config.json ]]; then
-                from=${dir%/}
+                choices=("${dir%/}" "${choices[@]}")
             fi
         done
-    fi
-    [[ -n $from && -d $from ]] ||
-        die "Found no backup with your settings in ${DATA/#"$HOME"/\~}; pick one with --from=<folder>"
-    from=${from%/}
-    read -rp "Put back the configs from ${from/#"$HOME"/\~}? [Y/n] " answer || answer=""
-    if [[ $answer =~ ^[Nn] ]]; then
-        log "Pick another with --from=<folder>:"
-        printf '   %s\n' "$DATA"/backup-*/
-        return
+        ((${#choices[@]})) ||
+            die "Found no backup with your settings in ${DATA/#"$HOME"/\~}; pick one with --from=<folder>"
+        log "Backups with settings in them, newest first:"
+        for i in "${!choices[@]}"; do
+            printf '   %d) %s  %s\n' $((i + 1)) "${choices[i]##*/backup-}" "$(describe_backup "${choices[i]}")"
+        done
+        read -rp "Which one has your settings? [1] " answer || answer=""
+        answer=${answer:-1}
+        [[ $answer =~ ^[0-9]+$ ]] && ((answer >= 1 && answer <= ${#choices[@]})) || die "There's no backup $answer"
+        from=${choices[answer - 1]}
+    else
+        [[ -d $from ]] || die "There's no folder ${from/#"$HOME"/\~}"
+        from=${from%/}
+        read -rp "Put back the configs from ${from/#"$HOME"/\~}? [Y/n] " answer || answer=""
+        if [[ $answer =~ ^[Nn] ]]; then return; fi
     fi
 
     BACKUP="$BACKUP-before-restore" # Never picked by a later restore

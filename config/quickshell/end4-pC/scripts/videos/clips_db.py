@@ -95,9 +95,18 @@ def connect(library, create=True):
 def migrate(db):
     """Upgrades databases made by older versions of this script, keyed on PRAGMA user_version. New ones start
     out current."""
-    if db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
-        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        db.commit()
+    if db.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+        return
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(clips)")}
+    if "remote_id" in columns:  # Version 2 synced with Proton Drive; none of that is in R2, so every clip starts out local
+        db.executescript("""
+            ALTER TABLE clips RENAME COLUMN remote_id TO remote_etag;
+            ALTER TABLE clips RENAME COLUMN meta_sha1 TO meta_etag;
+            UPDATE clips SET remote_etag = NULL, remote_sha1 = NULL, meta_etag = NULL, pushed = 0, meta_base = NULL;
+            DELETE FROM clips WHERE deleted = 1;
+        """)
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    db.commit()
 
 
 def get_meta(db, key, default=None):

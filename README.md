@@ -107,7 +107,7 @@ made after installing:
 | `system` | gtk/qt themes, cursor, fonts, user groups and fish as ur login shell |
 | `login` | sets up greetd + tuigreet as the login screen if u dont have one (like on a minimal install) |
 | `clips` | builds gpu-screen-recorder (same as `--with-clips`) |
-| `restore` | puts back the configs from a backup (the newest one with ur settings, or `--from=<folder>`) |
+| `restore` | puts back the configs from a backup, u pick which one from a list (or `--from=<folder>`) |
 
 ## The notch
 
