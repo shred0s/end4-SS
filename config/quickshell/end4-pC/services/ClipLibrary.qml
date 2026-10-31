@@ -8,14 +8,14 @@ import Quickshell.Io
 
 /*
  * The clip library as the Clips app (clips.qml) sees it: clips and their metadata from the library
- * database (clips_db.py), edits, and Proton Drive sync (clips_proton.py). The replay buffer belongs to
+ * database (clips_db.py), edits, and Cloudflare R2 sync (clips_r2.py). The replay buffer belongs to
  * the shell's Clips service, so buffer buttons here reach it over IPC.
  */
 Singleton {
     id: root
 
     readonly property string dbScriptPath: `${Directories.scriptPath}/videos/clips_db.py`
-    readonly property string driveScriptPath: `${Directories.scriptPath}/videos/clips_proton.py`
+    readonly property string syncScriptPath: `${Directories.scriptPath}/videos/clips_r2.py`
     readonly property string clipScriptPath: `${Directories.scriptPath}/videos/clip.sh`
     readonly property string keybindsScriptPath: `${Directories.scriptPath}/videos/clip_keybinds.sh`
     readonly property string shellPath: Quickshell.shellPath("shell.qml")
@@ -41,13 +41,12 @@ Singleton {
     property bool running: false
     property bool bufferBusy: false // A start/stop/save request is on its way to the shell
 
-    // Proton Drive, through the proton-drive CLI
-    property bool driveInstalled: false
-    property bool driveConnected: false
-    property string driveEmail: ""
-    property bool driveSigningIn: false
-    property string driveAuthUrl: "" // Lets the sign-in page be reopened if the browser didn't come up
-    property string driveMessage: "" // Last setup or sign-in error
+    // Cloudflare R2
+    property bool cloudConnected: false
+    property bool cloudConnecting: false
+    property string cloudEndpoint: ""
+    property string cloudBucket: ""
+    property string cloudMessage: "" // Why connecting didn't work
     property var syncStatus: ({})
     property list<string> downloadRequests: []
     property real now: Date.now() / 1000
@@ -63,7 +62,7 @@ Singleton {
             syncStatusFile.reload();
         });
         root.refresh();
-        root.checkDrive();
+        root.checkCloud();
     }
 
     // ---- Library ----
@@ -118,7 +117,7 @@ Singleton {
         root.patchClips(ids, { game: name });
         root.db(["set-game", `--game=${name}`, ...ids], code => root.afterEdit(code, Translation.tr("Couldn't change the game")));
     }
-    // localOnly keeps the Proton Drive copy, so the clip stays in the library as cloud-only
+    // localOnly keeps the copy in R2, so the clip stays in the library as cloud-only
     function trash(ids, localOnly) {
         if (ids.length === 0) return;
         if (localOnly) root.patchClips(ids, { local: false, path: "" });
@@ -182,35 +181,40 @@ Singleton {
         if (file) Quickshell.execDetached(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", file]);
     }
 
-    // ---- Proton Drive ----
-    function driveCommand() {
-        return ["python3", "-I", root.driveScriptPath, "--library", root.savePath, "--cache", root.cacheDir];
+    // ---- Cloudflare R2 ----
+    function syncCommand() {
+        return ["python3", "-I", root.syncScriptPath, "--library", root.savePath, "--cache", root.cacheDir];
     }
-    function checkDrive() {
-        if (!driveStatusProc.running) driveStatusProc.running = true;
+    function checkCloud() {
+        if (!cloudStatusProc.running) cloudStatusProc.running = true;
     }
-    function signIn() {
-        root.driveMessage = "";
-        root.driveAuthUrl = "";
-        loginProc.running = true;
+    // Checked before it's saved. Passed through the environment so the secret stays off the command line.
+    function connectCloud(endpoint, bucket, accessKeyId, secretAccessKey) {
+        if (connectProc.running) return;
+        root.cloudMessage = "";
+        connectProc.environment = {
+            R2_ENDPOINT: endpoint.trim(),
+            R2_BUCKET: bucket.trim(),
+            R2_ACCESS_KEY_ID: accessKeyId.trim(),
+            R2_SECRET_ACCESS_KEY: secretAccessKey.trim()
+        };
+        connectProc.running = true;
     }
-    function cancelSignIn() {
-        loginProc.running = false;
-    }
-    function signOut() {
-        root.exec([...root.driveCommand(), "logout"], () => {
-            root.checkDrive();
+    // Forgets the keys and what was uploaded; the bucket itself is left alone
+    function disconnectCloud() {
+        root.exec([...root.syncCommand(), "disconnect"], () => {
+            root.checkCloud();
             root.refresh();
         });
     }
     // Uploads only what's asked for, and keeps already uploaded clips in step both ways. Detached so
     // transfers carry on after the app closes; progress comes back through the status file.
     function sync(extraArgs) {
-        if (!root.driveConnected) return;
-        Quickshell.execDetached([...root.driveCommand(), "sync", ...(extraArgs ?? [])]);
+        if (!root.cloudConnected) return;
+        Quickshell.execDetached([...root.syncCommand(), "sync", ...(extraArgs ?? [])]);
     }
     function scheduleSync() {
-        if (root.driveConnected) syncDebounce.restart();
+        if (root.cloudConnected) syncDebounce.restart();
     }
     function download(ids) {
         const wanted = ids.filter(id => !root.downloadRequests.includes(id));
@@ -221,7 +225,7 @@ Singleton {
     function upload(ids) {
         if (ids.length > 0) root.sync(["--upload", ...ids]);
     }
-    function removeFromDrive(ids) {
+    function removeFromCloud(ids) {
         if (ids.length > 0) root.sync(["--unlink", ...ids]);
     }
     // The running transfer for a clip, if any
@@ -241,7 +245,7 @@ Singleton {
         if (status.running) return;
         const finished = status.downloads ?? [];
         if (finished.length > 0) root.downloadRequests = root.downloadRequests.filter(id => !finished.includes(id));
-        if (status.signedOut) root.checkDrive();
+        if (status.signedOut) root.checkCloud();
         if (wasRunning) root.refresh();
     }
 
@@ -355,42 +359,42 @@ Singleton {
     }
 
     Process {
-        id: driveStatusProc
-        command: [...root.driveCommand(), "status"]
+        id: cloudStatusProc
+        command: [...root.syncCommand(), "status"]
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
                     const status = JSON.parse(text);
-                    const wasConnected = root.driveConnected;
-                    root.driveInstalled = status.installed;
-                    root.driveConnected = status.connected;
-                    root.driveEmail = status.email ?? "";
-                    if (root.driveConnected && !wasConnected) root.sync(); // Catch up with other devices
+                    const wasConnected = root.cloudConnected;
+                    root.cloudConnected = status.connected;
+                    root.cloudEndpoint = status.endpoint ?? "";
+                    root.cloudBucket = status.bucket ?? "";
+                    if (status.connected) root.cloudMessage = "";
+                    else if (status.error) root.cloudMessage = status.error; // Saved keys that R2 now refuses
+                    if (root.cloudConnected && !wasConnected) root.sync(); // Catch up with other devices
                 } catch (e) {
-                    console.warn("[ClipLibrary] Failed to read Proton Drive status:", e);
+                    console.warn("[ClipLibrary] Failed to read R2 status:", e);
                 }
             }
         }
     }
     Process {
-        id: loginProc
-        command: [...root.driveCommand(), "login"]
-        onRunningChanged: root.driveSigningIn = running
-        stdout: SplitParser {
-            onRead: line => {
-                let event;
+        id: connectProc
+        command: [...root.syncCommand(), "connect"]
+        onRunningChanged: root.cloudConnecting = running
+        stdout: StdioCollector {
+            onStreamFinished: {
                 try {
-                    event = JSON.parse(line);
+                    const result = JSON.parse(text);
+                    if (!result.ok) root.cloudMessage = result.error;
                 } catch (e) {
-                    return;
+                    root.cloudMessage = Translation.tr("Couldn't check the R2 details");
                 }
-                if (event.event === "url") root.driveAuthUrl = event.url;
-                else if (event.event === "error") root.driveMessage = event.message;
             }
         }
         onExited: (exitCode, exitStatus) => {
-            root.driveAuthUrl = "";
-            root.checkDrive();
+            connectProc.environment = {};
+            root.checkCloud();
         }
     }
     FileView {
@@ -408,7 +412,7 @@ Singleton {
     Timer { // Pull in what other devices did while the app stays open
         interval: 5 * 60 * 1000
         repeat: true
-        running: root.driveConnected
+        running: root.cloudConnected
         onTriggered: if (!root.syncing) root.sync()
     }
     Timer {

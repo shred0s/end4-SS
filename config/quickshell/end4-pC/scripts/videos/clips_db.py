@@ -9,7 +9,7 @@ Usage: clips_db.py --library <dir> [--cache <dir>] <command> ...
   rename <id> --name=<name>
   set-game --game=<game> <id>...
   favorite <0|1> <id>...
-  delete [--local-only] <id>...       Move clips to the trash (from Proton Drive too on the next sync, unless --local-only)
+  delete [--local-only] <id>...       Move clips to the trash (and delete them from R2 on the next sync, unless --local-only)
   trim <id> <start> <end> [--precise] [--replace]
                                       Keep [start, end] seconds, as a new clip or in place of the old one
 
@@ -40,6 +40,7 @@ RAW_NAME_RE = re.compile(r"^Replay_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")  # gpu
 SETTLE_SECONDS = 5  # Don't adopt files modified more recently than this, they may still be written
 STAMP_PATH = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "qs-clips-library.stamp")
 
+SCHEMA_VERSION = 3
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS clips (
     id TEXT PRIMARY KEY,                    -- uuid, also the file name: <library>/<id><ext>
@@ -59,12 +60,12 @@ CREATE TABLE IF NOT EXISTS clips (
     height INTEGER NOT NULL DEFAULT 0,
     fps INTEGER NOT NULL DEFAULT 0,
     has_audio INTEGER NOT NULL DEFAULT 0,
-    remote_id TEXT,                         -- Proton Drive node of the video, once uploaded
-    remote_sha1 TEXT,                       -- Video content there as of the last sync, to tell which side changed
-    meta_sha1 TEXT,                         -- Its metadata file there as of the last sync
+    remote_etag TEXT,                       -- ETag of the video in R2 as of the last sync; set once uploaded
+    remote_sha1 TEXT,                       -- That video's SHA-1, to tell which side changed it
+    meta_etag TEXT,                         -- ETag of its metadata file in R2 as of the last sync
     pushed REAL NOT NULL DEFAULT 0,         -- `modified` as of the last metadata sync
     meta_base TEXT,                         -- Metadata both sides agreed on at the last sync (JSON), for merging edits
-    deleted INTEGER NOT NULL DEFAULT 0      -- Deleted here; the next sync removes it from Proton Drive, then the row
+    deleted INTEGER NOT NULL DEFAULT 0      -- Deleted here; the next sync removes it from R2, then the row
 );
 CREATE TABLE IF NOT EXISTS games (
     name TEXT PRIMARY KEY,
@@ -92,28 +93,11 @@ def connect(library, create=True):
 
 
 def migrate(db):
-    version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version >= 2:
-        return
-    columns = {r["name"] for r in db.execute("PRAGMA table_info(clips)")}
-    if "drive_id" in columns:  # Synced with Google Drive before; nothing carries over to Proton Drive
-        db.executescript("""
-            ALTER TABLE clips RENAME COLUMN md5 TO sha1;
-            ALTER TABLE clips RENAME COLUMN drive_id TO remote_id;
-            ALTER TABLE clips RENAME COLUMN drive_md5 TO remote_sha1;
-            ALTER TABLE clips ADD COLUMN meta_sha1 TEXT;
-            ALTER TABLE clips ADD COLUMN pushed REAL NOT NULL DEFAULT 0;
-            UPDATE clips SET sha1 = NULL, remote_id = NULL, remote_sha1 = NULL;
-            DELETE FROM clips WHERE deleted = 1;
-            DELETE FROM meta WHERE key IN ('drive_root', 'drive_folder');
-        """)
-        if "skip_upload" in columns:
-            db.execute("ALTER TABLE clips DROP COLUMN skip_upload")
-        columns |= {"meta_sha1", "pushed"}
-    if "meta_base" not in columns:
-        db.execute("ALTER TABLE clips ADD COLUMN meta_base TEXT")
-    db.execute("PRAGMA user_version = 2")
-    db.commit()
+    """Upgrades databases made by older versions of this script, keyed on PRAGMA user_version. New ones start
+    out current."""
+    if db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        db.commit()
 
 
 def get_meta(db, key, default=None):
@@ -372,7 +356,7 @@ def remove_empty_game_folders(library):
 
 
 def reconcile(db, library):
-    """Forget clips whose file is gone (unless Drive still has them) and return the files that need probing."""
+    """Forget clips whose file is gone (unless R2 still has them) and return the files that need probing."""
     to_probe = []
     for row in db.execute("SELECT id, ext FROM clips WHERE deleted = 1").fetchall():
         if os.path.exists(clip_path(library, row)):  # Restored from the trash
@@ -382,7 +366,7 @@ def reconcile(db, library):
         try:
             st = os.stat(path)
         except FileNotFoundError:
-            if not row["remote_id"]:
+            if not row["remote_etag"]:
                 db.execute("DELETE FROM clips WHERE id = ?", (row["id"],))
             elif row["mtime"]:
                 db.execute("UPDATE clips SET mtime = 0, sha1 = NULL WHERE id = ?", (row["id"],))
@@ -414,8 +398,8 @@ def clip_json(library, cache, row):
         "hasAudio": bool(row["has_audio"]),
         "thumb": thumb if os.path.exists(thumb) else "",
         "local": local,
-        "cloud": bool(row["remote_id"]),
-        "synced": bool(local and row["remote_id"] and row["sha1"] and row["sha1"] == row["remote_sha1"]),
+        "cloud": bool(row["remote_etag"]),
+        "synced": bool(local and row["remote_etag"] and row["sha1"] and row["sha1"] == row["remote_sha1"]),
         "source": row["source"] or "",
     }
 
@@ -475,7 +459,7 @@ def cmd_index(args):
 
 def clean_thumbnails(thumbs_dir, rows, cache):
     keep = {os.path.basename(thumb_path(cache, r)) for r in rows}
-    keep |= {os.path.basename(thumb_path(cache, r, cloud=True)) for r in rows if r["remote_id"]}
+    keep |= {os.path.basename(thumb_path(cache, r, cloud=True)) for r in rows if r["remote_etag"]}
     cutoff = time.time() - 600  # Leave anything a running sync may have just fetched
     for entry in os.scandir(thumbs_dir):
         try:
@@ -534,15 +518,15 @@ def cmd_delete(args):
     db = connect(args.library)
     failed = 0
     for row in get_clips(db, args.ids):
-        if args.local_only and not (row["remote_id"] and row["sha1"] and row["sha1"] == row["remote_sha1"]):
-            continue  # Proton Drive doesn't have this exact file, so this copy can't go
+        if args.local_only and not (row["remote_etag"] and row["sha1"] and row["sha1"] == row["remote_sha1"]):
+            continue  # R2 doesn't have this exact file, so this copy can't go
         path = clip_path(args.library, row)
         if os.path.exists(path) and not trash(path):
             failed += 1
             continue
         if args.local_only:
             db.execute("UPDATE clips SET mtime = 0, sha1 = NULL WHERE id = ?", (row["id"],))
-        elif row["remote_id"]:
+        elif row["remote_etag"]:
             db.execute("UPDATE clips SET deleted = 1 WHERE id = ?", (row["id"],))
         else:
             db.execute("DELETE FROM clips WHERE id = ?", (row["id"],))
@@ -628,7 +612,7 @@ def main():
     p.set_defaults(func=cmd_favorite)
 
     p = sub.add_parser("delete")
-    p.add_argument("--local-only", action="store_true", help="Keep the Proton Drive copy")
+    p.add_argument("--local-only", action="store_true", help="Keep the copy in R2")
     p.add_argument("ids", nargs="+")
     p.set_defaults(func=cmd_delete)
 

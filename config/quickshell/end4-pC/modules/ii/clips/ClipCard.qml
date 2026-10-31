@@ -19,7 +19,7 @@ Item {
     readonly property bool hovered: mouseArea.containsMouse || favoriteButton.hovered || checkButton.hovered
     readonly property var transfer: ClipLibrary.transferFor(root.clipData.id)
     readonly property bool downloading: !!root.transfer || ClipLibrary.downloadRequests.includes(root.clipData.id)
-    // Only for clips on Proton Drive (or on their way there)
+    // Only for clips in the cloud (or on their way there)
     readonly property string syncSymbol: {
         if (root.transfer) return root.transfer.phase === "download" ? "cloud_download" : "cloud_upload";
         if (!root.clipData.local) return "cloud";

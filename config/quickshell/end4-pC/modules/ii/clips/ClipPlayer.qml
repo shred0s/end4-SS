@@ -273,11 +273,11 @@ Item {
                 }
                 IconButton {
                     symbol: "cloud_upload"
-                    visible: ClipLibrary.driveConnected && root.available && !(root.clipData?.cloud ?? false)
-                    tooltip: Translation.tr("Upload to Proton Drive")
+                    visible: ClipLibrary.cloudConnected && root.available && !(root.clipData?.cloud ?? false)
+                    tooltip: Translation.tr("Upload to the cloud")
                     onClicked: {
                         ClipLibrary.upload([root.currentId]);
-                        root.showToast(Translation.tr("Uploading to Proton Drive"));
+                        root.showToast(Translation.tr("Uploading to the cloud"));
                     }
                 }
                 IconButton {
@@ -391,7 +391,7 @@ Item {
                     opacity: 0.85
                 }
 
-                // Only on Proton Drive so far
+                // Only in the cloud so far
                 Item {
                     anchors.fill: parent
                     visible: !root.available
@@ -421,9 +421,9 @@ Item {
                             wrapMode: Text.Wrap
                             text: root.downloading
                                 ? Translation.tr("Downloading… %1%").arg(Math.round((root.transfer?.progress ?? 0) * 100))
-                                : ClipLibrary.driveConnected
-                                    ? Translation.tr("This clip is on Proton Drive. Download it (%1) to watch and edit it here.").arg(ClipLibrary.formatSize(root.clipData?.size ?? 0))
-                                    : Translation.tr("This clip is on Proton Drive. Sign in to Proton Drive to download it.")
+                                : ClipLibrary.cloudConnected
+                                    ? Translation.tr("This clip is in the cloud. Download it (%1) to watch and edit it here.").arg(ClipLibrary.formatSize(root.clipData?.size ?? 0))
+                                    : Translation.tr("This clip is in the cloud. Connect to R2 in the settings to download it.")
                             color: "#ffffff"
                             font.pixelSize: Appearance.font.pixelSize.normal
                         }
@@ -434,7 +434,7 @@ Item {
                         }
                         RippleButton {
                             Layout.alignment: Qt.AlignHCenter
-                            visible: !root.downloading && ClipLibrary.driveConnected
+                            visible: !root.downloading && ClipLibrary.cloudConnected
                             implicitHeight: 40
                             implicitWidth: downloadRow.implicitWidth + 32
                             buttonRadius: height / 2
@@ -792,10 +792,10 @@ Item {
                     DetailRow { icon: "hard_drive"; label: Translation.tr("Size"); value: ClipLibrary.formatSize(root.clipData?.size ?? 0) }
                     DetailRow {
                         icon: "cloud"
-                        label: Translation.tr("Proton Drive")
-                        visible: ClipLibrary.driveConnected || !root.available
+                        label: Translation.tr("Cloud")
+                        visible: ClipLibrary.cloudConnected || !root.available
                         value: root.transfer ? Translation.tr("Transferring %1%").arg(Math.round((root.transfer.progress ?? 0) * 100))
-                            : !root.available ? Translation.tr("Only on Drive")
+                            : !root.available ? Translation.tr("Only in the cloud")
                             : root.clipData?.synced ? Translation.tr("Synced")
                             : root.clipData?.cloud ? Translation.tr("Waiting to sync")
                             : Translation.tr("Not uploaded")

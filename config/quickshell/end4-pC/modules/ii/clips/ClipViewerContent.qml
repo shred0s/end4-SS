@@ -38,7 +38,7 @@ Item {
     readonly property real weekAgo: Date.now() / 1000 - 7 * 86400
     readonly property int favoriteCount: ClipLibrary.clips.filter(c => c.favorite).length
     readonly property int recentCount: ClipLibrary.clips.filter(c => c.created >= root.weekAgo).length
-    readonly property int driveCount: ClipLibrary.clips.filter(c => c.cloud).length
+    readonly property int cloudCount: ClipLibrary.clips.filter(c => c.cloud).length
     readonly property string saveShortcut: root.shortcutLabel(Config.options.clips.shortcuts.save)
 
     readonly property list<var> visibleClips: {
@@ -53,7 +53,7 @@ Item {
         return ClipLibrary.clips.filter(c => {
             if (root.view === "favorites" && !c.favorite) return false;
             if (root.view === "recent" && c.created < root.weekAgo) return false;
-            if (root.view === "drive" && !c.cloud) return false;
+            if (root.view === "cloud" && !c.cloud) return false;
             if (root.view === "game" && c.game !== root.selectedGame) return false;
             if (query && !c.name.toLowerCase().includes(query) && !c.game.toLowerCase().includes(query)) return false;
             return true;
@@ -174,16 +174,15 @@ Item {
         root.play(clip);
     }
 
-    readonly property string driveIcon: {
-        if (!ClipLibrary.driveConnected) return "cloud_off";
+    readonly property string cloudIcon: {
+        if (!ClipLibrary.cloudConnected) return "cloud_off";
         if (ClipLibrary.syncing) return "cloud_sync";
         if (ClipLibrary.syncStatus.error) return "sync_problem";
         return "cloud_done";
     }
-    readonly property string driveSummary: {
+    readonly property string cloudSummary: {
         const status = ClipLibrary.syncStatus;
-        if (!ClipLibrary.driveInstalled) return Translation.tr("Needs the proton-drive CLI");
-        if (!ClipLibrary.driveConnected) return status.signedOut ? Translation.tr("Signed out, sign in again to sync") : Translation.tr("Sync clips between your devices");
+        if (!ClipLibrary.cloudConnected) return ClipLibrary.cloudBucket ? Translation.tr("Can't connect, check the R2 details") : Translation.tr("Sync clips between your devices");
         if (ClipLibrary.syncing) {
             const progress = Math.round((status.progress ?? 0) * 100);
             if (status.phase === "upload") return Translation.tr("Uploading “%1” · %2%").arg(status.name).arg(progress);
@@ -192,7 +191,7 @@ Item {
         }
         if (status.error) return Translation.tr("Sync failed: %1").arg(status.error);
         if (status.finished) return Translation.tr("Last synced: %1").arg(ClipLibrary.formatRelative(status.finished));
-        return Translation.tr("Signed in");
+        return Translation.tr("Connected");
     }
 
     // Keep the open clip pointing at fresh data (or close it if it's gone)
@@ -370,12 +369,12 @@ Item {
                 onClicked: root.showView("recent")
             }
             NavButton {
-                visible: ClipLibrary.driveConnected || root.driveCount > 0
+                visible: ClipLibrary.cloudConnected || root.cloudCount > 0
                 symbol: "cloud"
-                label: Translation.tr("On Proton Drive")
-                count: root.driveCount
-                active: root.view === "drive"
-                onClicked: root.showView("drive")
+                label: Translation.tr("In the cloud")
+                count: root.cloudCount
+                active: root.view === "cloud"
+                onClicked: root.showView("cloud")
             }
 
             StyledText {
@@ -405,18 +404,18 @@ Item {
                 }
             }
 
-            // Proton Drive
+            // Cloud sync
             RippleButton {
                 Layout.fillWidth: true
-                implicitHeight: driveColumn.implicitHeight + 20
+                implicitHeight: cloudColumn.implicitHeight + 20
                 buttonRadius: Appearance.rounding.normal
                 colBackground: Appearance.colors.colLayer1
                 colBackgroundHover: Appearance.colors.colLayer1Hover
                 colRipple: Appearance.colors.colLayer1Active
-                onClicked: driveDialog.open()
+                onClicked: cloudDialog.openDialog()
 
                 contentItem: ColumnLayout {
-                    id: driveColumn
+                    id: cloudColumn
                     anchors {
                         fill: parent
                         margins: 10
@@ -427,30 +426,30 @@ Item {
                     RowLayout {
                         spacing: 10
                         MaterialSymbol {
-                            text: root.driveIcon
+                            text: root.cloudIcon
                             iconSize: 22
-                            fill: ClipLibrary.driveConnected ? 1 : 0
-                            color: ClipLibrary.syncStatus.error && ClipLibrary.driveConnected && !ClipLibrary.syncing
+                            fill: ClipLibrary.cloudConnected ? 1 : 0
+                            color: ClipLibrary.syncStatus.error && ClipLibrary.cloudConnected && !ClipLibrary.syncing
                                 ? Appearance.colors.colError : Appearance.colors.colOnLayer1
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 0
                             StyledText {
-                                text: Translation.tr("Proton Drive")
+                                text: Translation.tr("Cloudflare R2")
                                 color: Appearance.colors.colOnLayer1
                                 font.weight: Font.Medium
                             }
                             StyledText {
                                 Layout.fillWidth: true
-                                text: root.driveSummary
+                                text: root.cloudSummary
                                 elide: Text.ElideRight
                                 color: Appearance.colors.colSubtext
                                 font.pixelSize: Appearance.font.pixelSize.smaller
                             }
                         }
                         ToolIconButton {
-                            visible: ClipLibrary.driveConnected
+                            visible: ClipLibrary.cloudConnected
                             enabled: !ClipLibrary.syncing
                             opacity: enabled ? 1 : 0.4
                             implicitWidth: 34
@@ -590,7 +589,7 @@ Item {
                                 elide: Text.ElideRight
                                 text: root.view === "favorites" ? Translation.tr("Favorites")
                                     : root.view === "recent" ? Translation.tr("Last 7 days")
-                                    : root.view === "drive" ? Translation.tr("On Proton Drive")
+                                    : root.view === "cloud" ? Translation.tr("In the cloud")
                                     : root.view === "game" ? root.selectedGame
                                     : Translation.tr("All clips")
                                 color: Appearance.colors.colOnLayer1
@@ -722,14 +721,14 @@ Item {
                             }
                             SelectionAction {
                                 readonly property list<string> cloudOnly: root.selectedClips.filter(c => !c.local).map(c => c.id)
-                                visible: ClipLibrary.driveConnected && cloudOnly.length > 0
+                                visible: ClipLibrary.cloudConnected && cloudOnly.length > 0
                                 symbol: "cloud_download"
                                 label: Translation.tr("Download")
                                 onClicked: ClipLibrary.download(cloudOnly)
                             }
                             SelectionAction {
                                 readonly property list<string> notUploaded: root.selectedClips.filter(c => c.local && !c.cloud).map(c => c.id)
-                                visible: ClipLibrary.driveConnected && notUploaded.length > 0
+                                visible: ClipLibrary.cloudConnected && notUploaded.length > 0
                                 symbol: "cloud_upload"
                                 label: Translation.tr("Upload")
                                 onClicked: ClipLibrary.upload(notUploaded)
@@ -816,7 +815,7 @@ Item {
                     MaterialShapeWrappedMaterialSymbol {
                         Layout.alignment: Qt.AlignHCenter
                         visible: !(ClipLibrary.loading && !ClipLibrary.loaded)
-                        text: root.searchText.length > 0 ? "search_off" : root.view === "favorites" ? "star" : root.view === "drive" ? "cloud" : "movie"
+                        text: root.searchText.length > 0 ? "search_off" : root.view === "favorites" ? "star" : root.view === "cloud" ? "cloud" : "movie"
                         iconSize: 48
                         padding: 22
                         wrappedShape: MaterialShape.Shape.Cookie9Sided
@@ -828,7 +827,7 @@ Item {
                         visible: !(ClipLibrary.loading && !ClipLibrary.loaded)
                         text: root.searchText.length > 0 ? Translation.tr("No clips match “%1”").arg(root.searchText)
                             : root.view === "favorites" ? Translation.tr("No favorites yet")
-                            : root.view === "drive" ? Translation.tr("Nothing on Proton Drive yet")
+                            : root.view === "cloud" ? Translation.tr("Nothing in the cloud yet")
                             : Translation.tr("No clips yet")
                         color: Appearance.colors.colOnLayer1
                         font.pixelSize: Appearance.font.pixelSize.larger
@@ -841,7 +840,7 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.Wrap
                         text: root.view === "favorites" ? Translation.tr("Star a clip to keep it here.")
-                            : root.view === "drive" ? Translation.tr("Select clips and press Upload, or right-click one and pick Upload to Proton Drive.")
+                            : root.view === "cloud" ? Translation.tr("Select clips and press Upload, or right-click one and pick Upload to the cloud.")
                             : !root.saveShortcut ? Translation.tr("Set a shortcut for saving clips under Shortcuts & sound.")
                             : ClipLibrary.running ? Translation.tr("Clipping is on. Press %1 in game to save the last %2 seconds.").arg(root.saveShortcut).arg(Config.options.clips.clipSeconds)
                             : Translation.tr("Turn on clipping to keep a replay buffer running, then press %1 in game to save a clip.").arg(root.saveShortcut)
@@ -849,7 +848,7 @@ Item {
                     }
                     RippleButton {
                         Layout.alignment: Qt.AlignHCenter
-                        visible: !ClipLibrary.running && !(ClipLibrary.loading && !ClipLibrary.loaded) && root.view !== "favorites" && root.view !== "drive" && root.searchText.length === 0
+                        visible: !ClipLibrary.running && !(ClipLibrary.loading && !ClipLibrary.loaded) && root.view !== "favorites" && root.view !== "cloud" && root.searchText.length === 0
                         implicitHeight: 40
                         implicitWidth: startRow.implicitWidth + 32
                         buttonRadius: height / 2
@@ -979,31 +978,31 @@ Item {
                 onClicked: ClipLibrary.openExternally(clipMenu.targetClip.path)
             }
             MenuDivider {
-                visible: ClipLibrary.driveConnected
+                visible: ClipLibrary.cloudConnected
             }
             MenuEntry {
-                visible: ClipLibrary.driveConnected && !(clipMenu.targetClip?.local ?? true)
+                visible: ClipLibrary.cloudConnected && !(clipMenu.targetClip?.local ?? true)
                 symbol: "cloud_download"
                 label: Translation.tr("Download")
                 onClicked: ClipLibrary.download([clipMenu.targetClip.id])
             }
             MenuEntry {
-                visible: ClipLibrary.driveConnected && (clipMenu.targetClip?.local ?? false) && !clipMenu.targetClip?.cloud
+                visible: ClipLibrary.cloudConnected && (clipMenu.targetClip?.local ?? false) && !clipMenu.targetClip?.cloud
                 symbol: "cloud_upload"
-                label: Translation.tr("Upload to Proton Drive")
+                label: Translation.tr("Upload to the cloud")
                 onClicked: ClipLibrary.upload([clipMenu.targetClip.id])
             }
             MenuEntry {
-                visible: ClipLibrary.driveConnected && (clipMenu.targetClip?.synced ?? false) // Drive has this exact file
+                visible: ClipLibrary.cloudConnected && (clipMenu.targetClip?.synced ?? false) // R2 has this exact file
                 symbol: "file_download_off"
-                label: Translation.tr("Remove download (keep on Drive)")
+                label: Translation.tr("Remove download (keep in the cloud)")
                 onClicked: ClipLibrary.trash([clipMenu.targetClip.id], true)
             }
             MenuEntry {
-                visible: ClipLibrary.driveConnected && (clipMenu.targetClip?.local ?? false) && (clipMenu.targetClip?.cloud ?? false)
+                visible: ClipLibrary.cloudConnected && (clipMenu.targetClip?.local ?? false) && (clipMenu.targetClip?.cloud ?? false)
                 symbol: "cloud_off"
-                label: Translation.tr("Remove from Proton Drive")
-                onClicked: ClipLibrary.removeFromDrive([clipMenu.targetClip.id])
+                label: Translation.tr("Remove from the cloud (keep here)")
+                onClicked: ClipLibrary.removeFromCloud([clipMenu.targetClip.id])
             }
             MenuDivider {}
             MenuEntry {
@@ -1019,7 +1018,7 @@ Item {
     ClipDialog {
         id: deleteDialog
         property list<string> ids: []
-        readonly property bool onDrive: ClipLibrary.clips.some(c => c.cloud && deleteDialog.ids.includes(c.id))
+        readonly property bool inCloud: ClipLibrary.clips.some(c => c.cloud && deleteDialog.ids.includes(c.id))
         anchors.fill: parent
         backgroundWidth: 400
 
@@ -1028,8 +1027,8 @@ Item {
         }
         WindowDialogParagraph {
             Layout.fillWidth: true
-            text: deleteDialog.onDrive
-                ? Translation.tr("They'll be moved to the trash here and on Proton Drive, so you can still restore them for a while.")
+            text: deleteDialog.inCloud
+                ? Translation.tr("They'll be moved to the trash here, and deleted from the cloud for good since R2 has no trash. Other devices move their downloaded copies to the trash.")
                 : Translation.tr("They'll be moved to the trash, so you can still restore them from your file manager.")
         }
         WindowDialogButtonRow {
@@ -1274,10 +1273,10 @@ Item {
                 }
             }
             DialogButton {
-                buttonText: Translation.tr("Proton Drive…")
+                buttonText: Translation.tr("Cloud sync…")
                 onClicked: {
                     settingsDialog.close();
-                    driveDialog.open();
+                    cloudDialog.openDialog();
                 }
             }
             Item { Layout.fillWidth: true }
@@ -1292,49 +1291,101 @@ Item {
     }
 
     ClipDialog {
-        id: driveDialog
+        id: cloudDialog
+        readonly property bool filledIn: endpointField.text.trim().length > 0 && keyIdField.text.trim().length > 0
+            && secretField.text.trim().length > 0 && (bucketField.text.trim().length > 0 || endpointField.text.includes("/", 8))
         anchors.fill: parent
-        backgroundWidth: 540
+        backgroundWidth: 560
 
+        function openDialog() {
+            endpointField.text = ClipLibrary.cloudEndpoint;
+            bucketField.text = ClipLibrary.cloudBucket;
+            keyIdField.text = "";
+            secretField.text = "";
+            cloudDialog.open();
+        }
         function closeDialog() {
-            if (ClipLibrary.driveSigningIn) ClipLibrary.cancelSignIn();
-            driveDialog.close();
+            secretField.text = "";
+            cloudDialog.close();
             root.forceActiveFocus();
+        }
+        function connect() {
+            if (cloudDialog.filledIn && !ClipLibrary.cloudConnecting)
+                ClipLibrary.connectCloud(endpointField.text, bucketField.text, keyIdField.text, secretField.text);
+        }
+
+        Connections {
+            target: ClipLibrary
+            function onCloudConnectedChanged() {
+                if (!ClipLibrary.cloudConnected) return;
+                keyIdField.text = ""; // Saved now; no need to keep them on screen
+                secretField.text = "";
+            }
         }
 
         WindowDialogTitle {
-            text: Translation.tr("Proton Drive")
+            text: Translation.tr("Cloudflare R2")
         }
         WindowDialogParagraph {
             Layout.fillWidth: true
-            visible: !ClipLibrary.driveInstalled
-            text: Translation.tr("Syncing goes through Proton's proton-drive command line tool, which isn't installed. Put it on your PATH or in ~/.local/bin, then open this again.")
+            visible: !ClipLibrary.cloudConnected
+            text: Translation.tr("Clips sync through an R2 bucket of their own. In the Cloudflare dashboard, create a bucket for them, then under R2 → API tokens create a token with Object Read & Write access to just that bucket, and paste what it shows here.")
+        }
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: !ClipLibrary.cloudConnected
+            enabled: !ClipLibrary.cloudConnecting
+            spacing: 8
+            MaterialTextField {
+                id: endpointField
+                Layout.fillWidth: true
+                placeholderText: Translation.tr("Account ID or S3 address (https://….r2.cloudflarestorage.com)")
+                wrapMode: TextEdit.NoWrap
+                onAccepted: cloudDialog.connect()
+            }
+            MaterialTextField {
+                id: bucketField
+                Layout.fillWidth: true
+                placeholderText: Translation.tr("Bucket name")
+                wrapMode: TextEdit.NoWrap
+                onAccepted: cloudDialog.connect()
+            }
+            MaterialTextField {
+                id: keyIdField
+                Layout.fillWidth: true
+                placeholderText: Translation.tr("Access Key ID")
+                wrapMode: TextEdit.NoWrap
+                inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
+                onAccepted: cloudDialog.connect()
+            }
+            MaterialTextField {
+                id: secretField
+                Layout.fillWidth: true
+                placeholderText: Translation.tr("Secret Access Key")
+                echoMode: TextInput.Password
+                wrapMode: TextEdit.NoWrap
+                inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
+                onAccepted: cloudDialog.connect()
+            }
         }
         WindowDialogParagraph {
             Layout.fillWidth: true
-            visible: ClipLibrary.driveInstalled && !ClipLibrary.driveConnected
-            text: ClipLibrary.driveSigningIn
-                ? Translation.tr("Finish signing in in your browser…")
-                : Translation.tr("Sign in to Proton Drive to keep clips in step between your devices. Uploaded clips go into their own “Quickshell Clips” folder, and nothing else in your Drive is touched.")
-        }
-        WindowDialogParagraph {
-            Layout.fillWidth: true
-            visible: ClipLibrary.driveConnected
-            text: Translation.tr("Signed in as %1. Only the clips you pick get uploaded: select them and press Upload, or right-click one. Uploaded clips stay in step on all your devices (names, games, favorites, edits and deletions) and live in their own “Quickshell Clips” folder in your Proton Drive.")
-                .arg(ClipLibrary.driveEmail || Translation.tr("your Proton account"))
+            visible: ClipLibrary.cloudConnected
+            text: Translation.tr("Connected to the “%1” bucket. Only the clips you pick get uploaded: select them and press Upload, or right-click one. Uploaded clips stay in step on all your devices (names, games, favorites, edits and deletions). R2 has no trash, so deleting a clip that's in the cloud deletes it there for good.")
+                .arg(ClipLibrary.cloudBucket)
         }
         RowLayout {
             Layout.fillWidth: true
-            visible: ClipLibrary.driveConnected
+            visible: ClipLibrary.cloudConnected
             spacing: 10
             MaterialSymbol {
-                text: root.driveIcon
+                text: root.cloudIcon
                 iconSize: 20
                 color: Appearance.colors.colOnSurfaceVariant
             }
             StyledText {
                 Layout.fillWidth: true
-                text: root.driveSummary
+                text: root.cloudSummary
                 wrapMode: Text.Wrap
                 color: Appearance.colors.colOnSurfaceVariant
                 font.pixelSize: Appearance.font.pixelSize.small
@@ -1342,8 +1393,8 @@ Item {
         }
         StyledText {
             Layout.fillWidth: true
-            visible: ClipLibrary.driveMessage.length > 0
-            text: ClipLibrary.driveMessage
+            visible: ClipLibrary.cloudMessage.length > 0 && !ClipLibrary.cloudConnected
+            text: ClipLibrary.cloudMessage
             wrapMode: Text.Wrap
             color: Appearance.colors.colError
             font.pixelSize: Appearance.font.pixelSize.small
@@ -1352,28 +1403,29 @@ Item {
         WindowDialogButtonRow {
             Layout.bottomMargin: 10
             DialogButton {
-                visible: ClipLibrary.driveConnected
-                buttonText: Translation.tr("Sign out")
+                visible: ClipLibrary.cloudConnected
+                buttonText: Translation.tr("Disconnect")
                 colEnabled: Appearance.colors.colError
-                onClicked: ClipLibrary.signOut()
+                onClicked: ClipLibrary.disconnectCloud()
+            }
+            DialogButton {
+                visible: !ClipLibrary.cloudConnected
+                buttonText: Translation.tr("Open Cloudflare")
+                onClicked: Qt.openUrlExternally("https://dash.cloudflare.com/?to=/:account/r2/overview")
             }
             Item { Layout.fillWidth: true }
             DialogButton {
-                visible: ClipLibrary.driveSigningIn && ClipLibrary.driveAuthUrl.length > 0
-                buttonText: Translation.tr("Open sign-in page")
-                onClicked: Qt.openUrlExternally(ClipLibrary.driveAuthUrl)
+                buttonText: Translation.tr("Close")
+                onClicked: cloudDialog.closeDialog()
             }
             DialogButton {
-                buttonText: ClipLibrary.driveSigningIn ? Translation.tr("Cancel") : Translation.tr("Close")
-                onClicked: driveDialog.closeDialog()
+                visible: !ClipLibrary.cloudConnected
+                enabled: cloudDialog.filledIn && !ClipLibrary.cloudConnecting
+                buttonText: ClipLibrary.cloudConnecting ? Translation.tr("Connecting…") : Translation.tr("Connect")
+                onClicked: cloudDialog.connect()
             }
             DialogButton {
-                visible: ClipLibrary.driveInstalled && !ClipLibrary.driveConnected && !ClipLibrary.driveSigningIn
-                buttonText: Translation.tr("Sign in")
-                onClicked: ClipLibrary.signIn()
-            }
-            DialogButton {
-                visible: ClipLibrary.driveConnected
+                visible: ClipLibrary.cloudConnected
                 enabled: !ClipLibrary.syncing
                 buttonText: Translation.tr("Sync now")
                 onClicked: ClipLibrary.sync()
